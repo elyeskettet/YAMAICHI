@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yamaichi MES v16 | Smart Feedback</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    
+    <!-- LocalStorage MES Storage Layer -->
+    <script>
+      const MES_KEYS = { wf: 'mes_wf', po: 'mes_po' };
+
+      window.mesStorage = {
+        getWf()  { try { return JSON.parse(localStorage.getItem(MES_KEYS.wf)  || '[]'); } catch { return []; } },
+        getPo()  { try { return JSON.parse(localStorage.getItem(MES_KEYS.po)  || '[]'); } catch { return []; } },
+        saveWf(data) { localStorage.setItem(MES_KEYS.wf, JSON.stringify(data)); },
+        savePo(data) { localStorage.setItem(MES_KEYS.po, JSON.stringify(data)); },
+        savePoItem(idx, po) {
+          const all = window.mesStorage.getPo();
+          all[idx] = po;
+          window.mesStorage.savePo(all);
+        }
+      };
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+        body { font-family: 'Inter', sans-serif; background: #020617; color: #f8fafc; }
+        .admin-view { background: #f8fafc; color: #0f172a; }
+        .preserve-format { white-space: pre-wrap; }
+        .custom-scroll::-webkit-scrollbar { width: 5px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+        .timer-progress { transition: width 1s linear; }
+        .fade-enter-active, .fade-leave-active { transition: opacity 0.5s ease; }
+        .fade-enter-from, .fade-leave-to { opacity: 0; }
+    </style>
+</head>
+<body @keyup.enter="handleGlobalEnter">
+
+<div id="app">
+    <!-- LOGIN -->
+    <div v-if="view === 'login'" class="h-screen flex items-center justify-center bg-slate-950">
+        <div class="max-w-md w-full bg-slate-900 border border-slate-800 p-10 rounded-[2.5rem] shadow-2xl text-center">
+            <h1 class="text-3xl font-black italic mb-8 uppercase tracking-tighter">Yamaichi <span class="text-blue-500">MES</span></h1>
+            <button @click="view = 'operator'" class="w-full bg-slate-800 hover:bg-slate-700 py-4 rounded-xl font-black uppercase text-xs tracking-widest mb-6 border border-slate-700 transition">
+                <i class="fas fa-user-gear mr-2"></i> Operator Access
+            </button>
+            <div class="relative py-4 mb-6">
+                <div class="absolute inset-0 flex items-center"><div class="w-full border-t border-slate-800"></div></div>
+                <div class="relative flex justify-center text-xs uppercase"><span class="bg-slate-900 px-4 text-slate-500 font-bold">Admin Login</span></div>
+            </div>
+            <div class="space-y-4">
+                <input v-model="auth.user" type="text" placeholder="Admin Access ID" class="w-full bg-slate-950 border border-slate-800 p-4 rounded-xl outline-none focus:border-blue-500">
+                <input v-model="auth.pass" type="password" @keyup.enter="handleLogin" placeholder="Password" class="w-full bg-slate-950 border border-slate-800 p-4 rounded-xl outline-none focus:border-blue-500">
+                <button @click="handleLogin" class="w-full bg-blue-600 hover:bg-blue-500 py-4 rounded-xl font-black uppercase shadow-lg transition">Authorize Admin</button>
+            </div>
+            <p v-if="loginError" class="mt-4 text-red-500 text-xs font-bold uppercase">{{ loginError }}</p>
+        </div>
+    </div>
+
+    <!-- ADMIN CONSOLE -->
+    <div v-if="view === 'admin'" class="min-h-screen admin-view flex flex-col">
+        <nav class="bg-slate-950 text-white px-8 py-4 flex justify-between items-center sticky top-0 z-50">
+            <div class="flex items-center gap-6">
+                <h2 class="font-black italic text-xl uppercase">ELYES KETTET <span class="text-blue-500">| ADMIN</span></h2>
+                <div class="flex bg-slate-900 p-1 rounded-xl">
+                    <button @click="subTab = 'workflow'" :class="tabClass('workflow')">Workflows</button>
+                    <button @click="subTab = 'planning'" :class="tabClass('planning')">Planning</button>
+                </div>
+            </div>
+            <div class="flex gap-4">
+                <div v-if="cloudSyncing" class="flex items-center text-[10px] text-green-400 font-black animate-pulse mr-4"><i class="fas fa-save mr-2"></i> SAVING...</div>
+                <div v-else class="flex items-center text-[10px] text-emerald-500 font-black mr-4"><i class="fas fa-hdd mr-1"></i> LOCAL</div>
+                <button @click="view = 'operator'" class="bg-green-600 px-6 py-2 rounded-xl text-xs font-black uppercase">Start Shopfloor</button>
+                <button @click="logout" class="text-slate-500 hover:text-white"><i class="fas fa-power-off"></i></button>
+            </div>
+        </nav>
+
+        <main class="p-8 flex-1 max-w-[1800px] mx-auto w-full">
+            <!-- WORKFLOW SECTION -->
+            <div v-if="subTab === 'workflow'" class="grid grid-cols-12 gap-8">
+                <aside class="col-span-3 flex flex-col gap-4">
+                    <div class="flex justify-between items-center px-2">
+                        <h3 class="font-black text-slate-400 uppercase text-[10px] tracking-widest">Master Library</h3>
+                        <div class="flex gap-2">
+                            <label class="text-blue-600 hover:text-blue-400 text-xs font-bold cursor-pointer">
+                                <i class="fas fa-file-upload mr-1"></i> Upload JSON
+                                <input type="file" class="hidden" accept=".json" @change="importWorkflowJSON">
+                            </label>
+                        </div>
+                    </div>
+                    <div class="space-y-3 overflow-y-auto max-h-[70vh] custom-scroll p-1">
+                        <div v-for="(wf, idx) in workflows" @click="selWf = idx" 
+                             :class="['p-4 rounded-2xl cursor-pointer border-2 transition relative group', selWf === idx ? 'bg-white border-blue-500 shadow-lg' : 'bg-slate-100 border-transparent opacity-70']">
+                            <div class="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition">
+                                <button @click.stop="exportSingleWorkflow(wf)" class="text-blue-400 hover:text-blue-600"><i class="fas fa-file-download"></i></button>
+                                <button @click.stop="deleteWorkflow(idx)" class="text-red-400 hover:text-red-600"><i class="fas fa-trash"></i></button>
+                            </div>
+                            <span :class="wf.status === 'RELEASED' ? 'bg-green-500' : 'bg-red-500'" class="absolute -top-1 -left-1 w-3 h-3 rounded-full border-2 border-white"></span>
+                            <p class="text-[9px] font-black text-blue-600 uppercase mb-1">REV {{wf.revision || '0.0'}}</p>
+                            <p class="font-bold text-sm truncate uppercase">{{ wf.name }}</p>
+                        </div>
+                        <button @click="addWf" class="w-full py-4 border-2 border-dashed border-slate-300 rounded-2xl text-slate-400 font-bold hover:bg-slate-50">+ Create New</button>
+                    </div>
+                </aside>
+
+                <section v-if="workflows.length > 0" class="col-span-9 bg-white p-8 rounded-[2rem] border shadow-sm flex flex-col">
+                    <div class="flex justify-between border-b pb-6 mb-6">
+                        <div class="flex-1 mr-10">
+                            <input v-model="workflows[selWf].name" class="text-3xl font-black outline-none w-full bg-transparent mb-2" placeholder="Workflow Title">
+                            <div class="flex gap-4">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-[10px] font-black text-slate-400 uppercase">Rev:</span>
+                                    <input v-model="workflows[selWf].revision" class="bg-slate-100 px-2 py-1 rounded text-xs font-bold w-16" placeholder="A1">
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-[10px] font-black text-slate-400 uppercase">Status:</span>
+                                    <select v-model="workflows[selWf].status" class="bg-slate-100 px-2 py-1 rounded text-xs font-black">
+                                        <option value="RELEASED">RELEASED</option>
+                                        <option value="BLOCKED">BLOCKED</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        <button @click="saveDB('wf')" class="bg-blue-600 text-white px-8 py-3 rounded-xl font-black shadow-lg hover:bg-blue-700 transition self-start">SAVE LOCALLY</button>
+                    </div>
+                    <div class="space-y-6 overflow-y-auto max-h-[60vh] pr-2 custom-scroll">
+                        <div v-for="(step, sIdx) in workflows[selWf].steps" :key="sIdx" class="p-6 bg-slate-50 rounded-2xl border relative group">
+                            <button @click="workflows[selWf].steps.splice(sIdx, 1)" class="absolute top-4 right-4 text-red-300 hover:text-red-600 transition"><i class="fas fa-trash"></i></button>
+                            <div class="grid grid-cols-12 gap-6">
+                                <div class="col-span-4 space-y-4">
+                                    <input v-model="step.title" class="w-full p-2 border-b font-bold text-sm bg-transparent" placeholder="Instruction Title">
+                                    <div class="bg-white p-4 rounded-xl border-2 border-dashed border-slate-200 text-center relative h-32 flex items-center justify-center">
+                                        <input type="file" @change="handleMedia($event, sIdx)" class="absolute inset-0 opacity-0 cursor-pointer z-10">
+                                        <div v-if="step.media"><p class="text-[10px] font-black text-blue-600">MEDIA ATTACHED ✓</p></div>
+                                        <div v-else class="text-slate-400"><i class="fas fa-photo-video mb-1"></i><p class="text-[10px] font-bold">Add Visuals</p></div>
+                                    </div>
+                                    <div class="flex gap-2">
+                                        <select v-model="step.mode" class="flex-1 text-[10px] font-bold border rounded p-1">
+                                            <option value="MANUAL">MANUAL</option>
+                                            <option value="AUTO">AUTO</option>
+                                        </select>
+                                        <input v-if="step.mode === 'AUTO'" type="number" v-model.number="step.timer" class="w-12 border rounded text-center text-xs" title="Seconds">
+                                    </div>
+                                </div>
+                                <div class="col-span-8">
+                                    <textarea v-model="step.description" class="w-full h-44 p-4 rounded-xl border text-sm resize-none outline-none" placeholder="Instruction details..."></textarea>
+                                </div>
+                            </div>
+                        </div>
+                        <button @click="addStep" class="w-full py-4 border-2 border-dashed rounded-2xl text-slate-400 font-bold hover:bg-slate-50">+ New Step</button>
+                    </div>
+                </section>
+            </div>
+
+            <!-- PLANNING SECTION -->
+            <div v-if="subTab === 'planning'" class="space-y-6">
+                <div class="bg-white p-8 rounded-[2rem] border shadow-sm">
+                    <div class="flex justify-between items-center mb-6">
+                        <h3 class="text-xl font-black uppercase">Production Order Control</h3>
+                        <div class="flex gap-4">
+                            <label class="bg-slate-100 hover:bg-slate-200 px-4 py-2 rounded-xl text-xs font-black uppercase cursor-pointer border border-slate-300 transition">
+                                <i class="fas fa-file-import mr-2"></i> Upload Planning (JSON)
+                                <input type="file" class="hidden" accept=".json" @change="importPlanningJSON">
+                            </label>
+                            <button @click="exportPlanningJSON" class="bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-black uppercase hover:bg-black transition shadow-lg">
+                                <i class="fas fa-file-export mr-2"></i> Backup Planning
+                            </button>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-12 gap-4 items-end mb-6">
+                        <div class="col-span-2"><label class="text-[9px] font-black text-slate-400 uppercase">PO ID</label><input v-model="newPO.id" class="w-full p-2 bg-slate-50 border rounded-lg"></div>
+                        <div class="col-span-2"><label class="text-[9px] font-black text-slate-400 uppercase">Part Name</label><input v-model="newPO.item" class="w-full p-2 bg-slate-50 border rounded-lg"></div>
+                        <div class="col-span-2">
+                            <label class="text-[9px] font-black text-slate-400 uppercase">Process</label>
+                            <select v-model="newPO.wfName" class="w-full p-2 bg-slate-50 border rounded-lg font-bold">
+                                <option v-for="wf in releasedWorkflows" :value="wf.name">{{wf.name}}</option>
+                            </select>
+                        </div>
+                        <div class="col-span-1"><label class="text-[9px] font-black text-slate-400 uppercase">Qty</label><input v-model.number="newPO.qty" type="number" class="w-full p-2 bg-slate-50 border rounded-lg"></div>
+                        <div class="col-span-2 flex flex-col gap-1 p-2 bg-slate-50 rounded-lg border">
+                            <p class="text-[8px] font-black text-slate-400 uppercase">Enforce Scanning</p>
+                            <div class="flex gap-4">
+                                <label class="flex items-center gap-2 text-[10px] font-bold cursor-pointer">
+                                    <input type="checkbox" v-model="scanOptions.opId"> OP-ID
+                                </label>
+                                <label class="flex items-center gap-2 text-[10px] font-bold cursor-pointer">
+                                    <input type="checkbox" v-model="scanOptions.sn"> SN
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-span-1.5"><label class="text-[9px] font-black text-slate-400 uppercase">Start Date</label><input type="date" v-model="newPO.startDate" class="w-full p-1.5 bg-slate-50 border rounded-lg text-xs"></div>
+                        <div class="col-span-1.5"><label class="text-[9px] font-black text-slate-400 uppercase">Finish Date</label><input type="date" v-model="newPO.finishDate" class="w-full p-1.5 bg-slate-50 border rounded-lg text-xs"></div>
+                        <button @click="createPO" class="col-span-12 bg-blue-600 text-white py-3 rounded-xl font-black text-xs uppercase hover:bg-blue-700 transition shadow-xl mt-2">Commit Production Order</button>
+                    </div>
+                </div>
+
+                <div class="bg-white p-6 rounded-[2rem] border shadow-sm">
+                    <table class="w-full text-left">
+                        <thead class="text-[10px] font-black text-slate-400 uppercase border-b">
+                            <tr>
+                                <th class="pb-3">Status</th>
+                                <th class="pb-3">Order ID</th>
+                                <th class="pb-3">Flow</th>
+                                <th class="pb-3">Start/Finish</th>
+                                <th class="pb-3 text-right">Yield</th>
+                                <th class="pb-3 text-right">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y text-sm">
+                            <tr v-for="(po, pIdx) in productionOrders" :key="pIdx">
+                                <td class="py-3"><span :class="statusBadge(po.status)">{{po.status}}</span></td>
+                                <td class="py-3 font-mono font-bold">{{po.id}}</td>
+                                <td class="py-3 font-bold">{{po.wfName}}</td>
+                                <td class="py-3">
+                                    <div class="text-[10px] font-bold text-blue-600">S: {{po.startDate || 'N/A'}}</div>
+                                    <div class="text-[10px] font-bold text-red-500">F: {{po.finishDate || 'N/A'}}</div>
+                                </td>
+                                <td class="py-3 font-black text-blue-600 text-right">{{po.done || 0}} / {{po.qty}}</td>
+                                <td class="py-3 text-right">
+                                    <button @click="editPO(pIdx)" class="text-blue-500 mr-4 hover:text-blue-700 transition"><i class="fas fa-edit"></i></button>
+                                    <button @click="removePO(pIdx)" class="text-red-300 hover:text-red-500 transition"><i class="fas fa-trash"></i></button>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- OPERATOR EXPERIENCE -->
+    <div v-if="view === 'operator'" class="h-screen flex flex-col bg-slate-950 text-slate-100 overflow-hidden">
+        <header class="h-20 bg-slate-900/50 border-b border-slate-800 px-10 flex justify-between items-center">
+            <div class="flex items-center gap-6">
+                <h1 class="text-2xl font-black italic tracking-tighter">YAMAICHI <span class="text-blue-500">MES</span></h1>
+                <div v-if="activePO" class="flex gap-4">
+                    <div class="bg-slate-800 px-4 py-2 rounded-xl border border-slate-700 text-center">
+                        <p class="text-[9px] font-black text-blue-500 uppercase">Order</p>
+                        <p class="font-bold text-xs leading-none">{{activePO.id}}</p>
+                    </div>
+                    <div class="bg-slate-800 px-4 py-2 rounded-xl border border-slate-700 text-center">
+                        <p class="text-[9px] font-black text-orange-500 uppercase">Yield</p>
+                        <p class="font-bold text-xs leading-none">{{activePO.done}} / {{activePO.qty}}</p>
+                    </div>
+                </div>
+            </div>
+            <div class="flex gap-3">
+                <button @click="goToPlanning" class="bg-blue-600 hover:bg-blue-500 px-5 py-2.5 rounded-xl flex items-center gap-2 text-[10px] font-black uppercase transition shadow-lg">
+                    <i class="fas fa-list-ul"></i> Go To Planning List
+                </button>
+                <button @click="exitToLogin" title="Exit to Login" class="w-11 h-11 bg-slate-800 rounded-xl hover:bg-red-600 transition flex items-center justify-center border border-slate-700">
+                    <i class="fas fa-power-off text-slate-400"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- Buffer List -->
+        <div v-if="!activePO" class="flex-1 overflow-y-auto p-12">
+            <div class="max-w-5xl mx-auto">
+                <h2 class="text-4xl font-black uppercase italic tracking-tighter mb-10">Production Buffer</h2>
+                <div class="grid grid-cols-2 gap-8">
+                    <div v-for="po in productionOrders" @click="po.status === 'COMPLETED' ? null : openPOVerify(po)" 
+                         :class="['p-8 rounded-[2.5rem] border-2 transition relative shadow-2xl', po.status === 'COMPLETED' ? 'bg-slate-900 border-slate-900 opacity-40 cursor-not-allowed' : 'bg-slate-900 border-slate-800 hover:border-blue-600 cursor-pointer']">
+                        <div class="flex justify-between items-start mb-6">
+                            <span :class="statusBadge(po.status)" class="text-[9px] font-black px-3 py-1 rounded-full uppercase">{{po.status}}</span>
+                        </div>
+                        <h3 class="text-4xl font-black uppercase mb-2">{{po.id}}</h3>
+                        <p class="text-slate-500 font-bold mb-4 italic">{{po.item}}</p>
+                        <div class="flex justify-between items-end">
+                            <p class="text-[10px] font-black text-slate-600 uppercase">Rev: {{getWfRevision(po.wfName)}}</p>
+                            <p class="text-3xl font-black text-blue-500">{{po.done}} / {{po.qty}}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Verification -->
+        <div v-else-if="opState === 'verify'" class="flex-1 flex items-center justify-center">
+            <div class="max-w-md w-full bg-slate-900 border border-slate-800 p-12 rounded-[3.5rem] text-center shadow-2xl">
+                <div class="w-20 h-20 bg-blue-600/10 rounded-full flex items-center justify-center mx-auto mb-8 text-blue-500 text-3xl"><i class="fas fa-barcode"></i></div>
+                <h2 class="text-2xl font-black uppercase mb-4 tracking-tight">Scan {{currentReq}}</h2>
+                <input v-model="scanBuffer" @keyup.enter="handleScan" id="op-scan-input" autofocus class="w-full bg-black border border-slate-800 p-6 rounded-2xl font-mono text-center text-4xl text-blue-400 outline-none shadow-inner" placeholder="...">
+                <p v-if="scanError" class="mt-4 text-red-500 text-xs font-black uppercase">{{scanError}}</p>
+            </div>
+        </div>
+
+        <!-- Completion Feedback Message -->
+        <div v-else-if="opState === 'done'" class="flex-1 flex items-center justify-center bg-slate-950">
+            <div class="text-center animate-bounce">
+                <div class="w-32 h-32 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-6 shadow-[0_0_50px_rgba(34,197,94,0.4)]">
+                    <i class="fas fa-check text-5xl text-white"></i>
+                </div>
+                <h2 class="text-6xl font-black uppercase italic tracking-tighter">DONE</h2>
+                <p class="text-slate-500 font-bold mt-4 uppercase">Unit Registered • Preparing next...</p>
+            </div>
+        </div>
+
+        <!-- Working -->
+        <main v-else class="flex-1 flex overflow-hidden">
+            <section class="w-1/2 flex flex-col bg-slate-900/40 border-r border-slate-800">
+                <div class="flex-1 p-12 overflow-y-auto custom-scroll relative">
+                    <div v-if="curStep.mode === 'AUTO'" class="absolute top-0 left-0 h-1 bg-blue-500 timer-progress" :style="{width: timerW + '%'}"></div>
+                    <span class="text-blue-500 font-black text-[10px] uppercase mb-4 block">Step {{activePO.currentStepIdx + 1}} of {{opSteps.length}}</span>
+                    <h2 class="text-5xl font-black mb-10 leading-tight tracking-tighter">{{curStep.title}}</h2>
+                    <div class="bg-slate-800 p-10 rounded-[2.5rem] border border-slate-700 text-2xl font-medium leading-relaxed preserve-format">
+                        {{curStep.description}}
+                    </div>
+                </div>
+                <div class="p-10 bg-slate-900 border-t border-slate-800 flex gap-4">
+                    <button @click="prevOpStep" class="px-8 py-6 rounded-2xl bg-slate-800 font-black text-xs uppercase hover:bg-slate-700 transition">Back</button>
+                    <button v-if="curStep.mode === 'MANUAL' || activePO.currentStepIdx === opSteps.length - 1" 
+                            @click="nextOpStep" id="op-confirm-btn"
+                            class="flex-1 py-6 rounded-2xl bg-green-600 font-black text-3xl uppercase tracking-tighter shadow-xl transition">
+                        {{ activePO.currentStepIdx === opSteps.length - 1 ? 'Finish Cable' : 'Confirm [Enter]' }}
+                    </button>
+                    <div v-else class="flex-1 py-6 text-center text-slate-500 font-black uppercase text-xs self-center">Auto... ({{timeLeft}}s)</div>
+                </div>
+            </section>
+            <section class="flex-1 bg-black flex items-center justify-center p-12">
+                <div v-if="curStep.media" class="w-full h-full rounded-[3.5rem] overflow-hidden border-2 border-slate-800 bg-slate-900">
+                    <video v-if="curStep.mediaType.includes('video')" :src="curStep.media" controls autoplay loop class="w-full h-full object-contain"></video>
+                    <img v-else :src="curStep.media" class="w-full h-full object-contain">
+                </div>
+                <div v-else class="text-slate-800 font-black italic text-2xl">Visual Library Empty</div>
+            </section>
+        </main>
+    </div>
+</div>
+
+<script>
+const { createApp } = Vue
+
+createApp({
+    data() {
+        return {
+            view: 'login', subTab: 'workflow',
+            auth: { user: '', pass: '' }, loginError: '', scanError: '',
+            cloudSyncing: false,
+            workflows: [],
+            selWf: 0, productionOrders: [],
+            scanOptions: { opId: true, sn: true },
+            newPO: { id: '', item: '', qty: 10, wfName: '', reqs: [], startDate: '', finishDate: '', serials: [], currentStepIdx: 0 },
+            editingPOIdx: null, activePO: null, opState: 'idle', scanBuffer: '', scannedReqs: [], timeLeft: 0, timerW: 0, timerInterval: null
+        }
+    },
+    computed: {
+        releasedWorkflows() { return this.workflows.filter(w => w.status === 'RELEASED'); },
+        currentReq() { return this.activePO?.reqs?.find(r => !this.scannedReqs.includes(r)) || 'DONE'; },
+        opSteps() { return this.workflows.find(w => w.name === this.activePO?.wfName)?.steps || []; },
+        curStep() { return this.opSteps[this.activePO?.currentStepIdx] || {}; }
+    },
+    methods: {
+        handleGlobalEnter() {
+            if(this.view === 'operator' && this.opState === 'working') this.nextOpStep();
+        },
+        handleLogin() {
+            if(this.auth.user === 'ELYES KETTET' && this.auth.pass === 'Yamaichi2026') { this.view = 'admin'; this.loginError = ''; }
+            else { this.loginError = 'ACCESS DENIED'; }
+            this.auth = { user: '', pass: '' };
+        },
+        logout() { this.view = 'login'; },
+        tabClass(t) { return this.subTab === t ? 'bg-blue-600 text-white px-5 py-2 rounded-lg text-xs font-black' : 'px-5 py-2 text-slate-500 font-bold text-xs hover:text-white transition'; },
+        statusBadge(s) {
+            const colors = { 'PLANNED': 'bg-slate-200 text-slate-600', 'ONGOING': 'bg-blue-100 text-blue-600', 'COMPLETED': 'bg-green-600 text-white' };
+            return `px-3 py-1 rounded-full text-[9px] font-black ${colors[s]}`;
+        },
+        
+        // Workflow Management
+        addWf() { 
+            this.workflows.push({ name: "New Flow", revision: "0.1", status: "BLOCKED", steps: [] }); 
+            this.selWf = this.workflows.length - 1; 
+        },
+        deleteWorkflow(idx) {
+            if(confirm("Delete this workflow permanently?")) {
+                this.workflows.splice(idx, 1);
+                if(this.selWf >= this.workflows.length) this.selWf = 0;
+                this.saveDB('wf');
+            }
+        },
+        importWorkflowJSON(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const imported = JSON.parse(event.target.result);
+                    if(imported.name && imported.steps) {
+                        this.workflows.push(imported);
+                        this.selWf = this.workflows.length - 1;
+                        this.saveDB('wf');
+                    }
+                } catch (err) { alert("Invalid JSON"); }
+            };
+            reader.readAsText(file);
+        },
+        addStep() { this.workflows[this.selWf].steps.push({ title: "New Step", description: "", mode: "MANUAL", timer: 5, media: null, mediaType: '' }); },
+        handleMedia(e, sIdx) {
+            const file = e.target.files[0];
+            const reader = new FileReader();
+            reader.onload = (res) => { 
+                this.workflows[this.selWf].steps[sIdx].media = res.target.result; 
+                this.workflows[this.selWf].steps[sIdx].mediaType = file.type; 
+            };
+            reader.readAsDataURL(file);
+        },
+        getWfRevision(name) { return this.workflows.find(w => w.name === name)?.revision || 'N/A'; },
+
+        // Planning Logic
+        createPO() {
+            if(!this.newPO.id || !this.newPO.wfName) return;
+            const dynamicReqs = [];
+            if(this.scanOptions.opId) dynamicReqs.push('Operator ID');
+            if(this.scanOptions.sn) dynamicReqs.push('Serial Number');
+            
+            const poData = { ...this.newPO, reqs: dynamicReqs };
+
+            if(this.editingPOIdx !== null) { 
+                this.productionOrders[this.editingPOIdx] = { ...poData }; 
+                this.editingPOIdx = null; 
+            } else { 
+                this.productionOrders.push({ ...poData, done: 0, status: 'PLANNED', serials: [], currentStepIdx: 0 }); 
+            }
+            this.saveDB('po');
+            this.newPO = { id: '', item: '', qty: 10, wfName: '', reqs: [], startDate: '', finishDate: '', serials: [], currentStepIdx: 0 };
+        },
+        editPO(idx) { 
+            this.editingPOIdx = idx; 
+            this.newPO = { ...this.productionOrders[idx] }; 
+            this.scanOptions.opId = (this.newPO.reqs || []).includes('Operator ID');
+            this.scanOptions.sn = (this.newPO.reqs || []).includes('Serial Number');
+            this.subTab = 'planning'; 
+        },
+        removePO(idx) { this.productionOrders.splice(idx, 1); this.saveDB('po'); },
+        exportPlanningJSON() {
+            const blob = new Blob([JSON.stringify(this.productionOrders, null, 2)], { type: "application/json" });
+            const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "MES_Planning_Backup.json"; a.click();
+        },
+        importPlanningJSON(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const imported = JSON.parse(event.target.result);
+                    if(Array.isArray(imported)) {
+                        this.productionOrders = imported;
+                        this.saveDB('po');
+                        alert("Planning updated successfully");
+                    }
+                } catch (err) { alert("Error reading file"); }
+            };
+            reader.readAsText(file);
+        },
+
+        // Operator Navigation
+        goToPlanning() { clearInterval(this.timerInterval); this.activePO = null; this.opState = 'idle'; },
+        exitToLogin() { clearInterval(this.timerInterval); this.activePO = null; this.view = 'login'; this.opState = 'idle'; },
+        
+        openPOVerify(po) {
+            this.activePO = po; po.status = 'ONGOING';
+            this.scannedReqs = []; this.scanError = '';
+            if(po.reqs && po.reqs.length > 0 && po.currentStepIdx === 0) {
+                this.opState = 'verify';
+                this.$nextTick(() => document.getElementById('op-scan-input')?.focus());
+            } else {
+                this.opState = 'working';
+                this.startStepTimer();
+            }
+        },
+        handleScan() {
+            if(!this.scanBuffer) return;
+            if(this.currentReq === 'Serial Number' && this.activePO.serials?.includes(this.scanBuffer)) {
+                this.scanError = 'SERIAL ALREADY PROCESSED'; this.scanBuffer = ''; return;
+            }
+            if(this.currentReq === 'Serial Number') {
+                if(!this.activePO.serials) this.activePO.serials = [];
+                this.activePO.serials.push(this.scanBuffer);
+            }
+            this.scannedReqs.push(this.currentReq); this.scanBuffer = '';
+            if(this.scannedReqs.length >= (this.activePO.reqs || []).length) { this.opState = 'working'; this.startStepTimer(); }
+        },
+        startStepTimer() {
+            clearInterval(this.timerInterval); this.timerW = 0;
+            if(this.curStep.mode === 'AUTO' && this.activePO.currentStepIdx < this.opSteps.length - 1) {
+                this.timeLeft = this.curStep.timer;
+                this.timerInterval = setInterval(() => {
+                    this.timeLeft--; this.timerW = ((this.curStep.timer - this.timeLeft) / this.curStep.timer) * 100;
+                    if(this.timeLeft <= 0) this.nextOpStep();
+                }, 1000);
+            }
+        },
+        nextOpStep() {
+            if(this.activePO.currentStepIdx < this.opSteps.length - 1) { 
+                this.activePO.currentStepIdx++; 
+                this.startStepTimer(); 
+            } else {
+                // Unit Complete Logic
+                this.activePO.done++; 
+                this.activePO.currentStepIdx = 0;
+                this.opState = 'done'; // Trigger "DONE" message
+                this.savePOProgress(this.activePO);
+
+                setTimeout(() => {
+                    if(this.activePO.done >= this.activePO.qty) { 
+                        this.activePO.status = 'COMPLETED'; 
+                        this.savePOProgress(this.activePO);
+                        this.activePO = null; 
+                        this.opState = 'idle';
+                    } else { 
+                        this.scannedReqs = []; 
+                        if(this.activePO.reqs && this.activePO.reqs.length > 0) {
+                            this.opState = 'verify';
+                            this.$nextTick(() => document.getElementById('op-scan-input')?.focus());
+                        } else {
+                            this.opState = 'working';
+                            this.startStepTimer();
+                        }
+                    }
+                    this.savePOProgress(this.activePO);
+                }, 1500); // 1.5 second delay to show "DONE" message
+            }
+        },
+        prevOpStep() { if(this.activePO.currentStepIdx > 0) { this.activePO.currentStepIdx--; this.startStepTimer(); } },
+        
+        saveDB(target = 'both') { 
+            this.cloudSyncing = true;
+            if(target === 'both' || target === 'wf') {
+                window.mesStorage.saveWf(this.workflows);
+            }
+            if(target === 'both' || target === 'po') {
+                window.mesStorage.savePo(this.productionOrders);
+            }
+            setTimeout(() => { this.cloudSyncing = false; }, 600);
+        },
+        savePOProgress(po) {
+            if(!po) return;
+            this.cloudSyncing = true;
+            const idx = this.productionOrders.findIndex(p => p.id === po.id);
+            if(idx !== -1) {
+                window.mesStorage.savePoItem(idx, po);
+            }
+            setTimeout(() => { this.cloudSyncing = false; }, 400);
+        },
+        exportSingleWorkflow(wf) {
+            const blob = new Blob([JSON.stringify(wf, null, 2)], { type: "application/json" });
+            const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `WF_${wf.name}.json`; a.click();
+        }
+    },
+    mounted() {
+        // Load data from localStorage on startup
+        this.workflows = window.mesStorage.getWf();
+        this.productionOrders = window.mesStorage.getPo();
+    }
+}).mount('#app')
+</script>
+</body>
+</html>
